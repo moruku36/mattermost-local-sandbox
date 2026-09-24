@@ -6,6 +6,7 @@ __pycache__/
 data/reply-drafter-state.json
 data/reply-drafter-state.tmp
 data/reply-drafter-context.json
+data/reply-drafter-persona.txt
 
 # OS Files
 .DS_Store

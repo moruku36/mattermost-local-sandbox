@@ -83,24 +83,30 @@ PC起動時にMattermost環境が自動的にバックグラウンド起動す�
 
 ---
 
-## AI返信案アシスタント（ローカルLLM）
+## AI返信案アシスタント（Ollama / OpenAI API）
 
-新着のMattermost投稿を監視し、ローカルのOllamaで返信案を作成して、本人とBotだけが参加する非公開 `ai-drafts` チャンネルへ投稿します。Town SquareとOff-Topicは設定例に含まれています。**元のチャンネルやDMへ返信を送る機能はありません**。内容を確認・編集して、返信は人間が元の投稿へ手動で送信します。
+新着のMattermost投稿を監視し、OllamaまたはOpenAI APIで返信案を作成して、本人とBotだけが参加する非公開 `ai-drafts` チャンネルへ投稿します。Town SquareとOff-Topicは設定例に含まれています。**元のチャンネルやDMへ返信を送る機能はありません**。内容を確認・編集して、返信は人間が元の投稿へ手動で送信します。
 
-メッセージ本文はMattermost APIからこのPC上のプロセスへ渡り、Ollama（既定 `qwen2.5:14b`）で処理されます。外部LLMへは送信しません。監視対象は `.env` の `WATCH_CHANNELS` と `WATCH_DM_CHANNEL_IDS` で明示したものだけです。各チャンネルでBotが読める必要があります。起動時点より前の投稿は既読扱いになり、返信案は作られません。
+`LLM_PROVIDER=ollama` の場合、メッセージ本文はこのPC上のOllama（既定 `qwen2.5:14b`）だけで処理します。`LLM_PROVIDER=openai` の場合、現在の投稿、設定した会話文脈、返信者のペルソナがOpenAI APIへ送信されます。API応答は `store=false` で要求しますが、APIの標準不正利用監視ログは最大30日保持される場合があります。社内情報を外部APIへ送る運用が許可されているか確認してください。詳細は[OpenAI APIのデータ管理](https://developers.openai.com/api/docs/guides/your-data)を参照してください。
+
+監視対象は `.env` の `WATCH_CHANNELS` と `WATCH_DM_CHANNEL_IDS` で明示したものだけです。各チャンネルでBotが読める必要があります。起動時点より前の投稿は既読扱いになり、返信案は作られません。
 
 ### 初回設定
 
 1. 管理者がMattermostのBotアカウント作成を有効にし、専用Botアカウントを作成します。作成時に表示されるBot access tokenを控えます。Botに管理者権限や全チャンネル投稿権限を付けず、対象のチャンネルと`ai-drafts`だけに参加させます。
 2. Mattermostに非公開 `ai-drafts` チャンネルを作成し、自分と専用Botだけを参加させます。
 3. `.env.example` を `.env` にコピーし、Botトークンを `MATTERMOST_BOT_TOKEN` に設定します。`MATTERMOST_URL` はブラウザーで開いている方に合わせます（`http://localhost:3000` または `http://localhost:8065`）。`.env` と会話文脈・処理状態ファイルはGit管理外です。
-4. Ollamaをインストールして起動し、モデルを取得します（例: `ollama pull qwen2.5:14b`）。モデル変更は `OLLAMA_MODEL` で行えます。Pythonの追加パッケージは不要です。
+4. 使用する生成先を選びます。Ollamaを使う場合はインストール・起動してモデルを取得します（例: `ollama pull qwen2.5:14b`）。OpenAI APIを使う場合はAPIキーを取得し、 `.env` の `LLM_PROVIDER=openai` と `OPENAI_API_KEY` を設定します。ChatGPTの契約とAPI利用料は別です。Pythonの追加パッケージは不要です。
+5. 必要であれば `data/reply-drafter-persona.example.txt` を `data/reply-drafter-persona.txt` にコピーして返信者の口調や立場を記入します。実ファイルはGit管理外です。API利用時はこの内容もリクエストごとにOpenAIへ送信されます。
 
 ### 起動
 
 ```powershell
 Copy-Item .env.example .env
 # .env の MATTERMOST_BOT_TOKEN を編集
+# OpenAI APIを使う場合は LLM_PROVIDER=openai と OPENAI_API_KEY も設定
+New-Item -ItemType Directory -Force data
+Copy-Item .\data\reply-drafter-persona.example.txt .\data\reply-drafter-persona.txt
 python .\reply_drafter.py
 ```
 
@@ -125,7 +131,11 @@ Mattermostでは既存の1対1 DMへ新しい参加者を加えると、履歴�
 | `WATCH_CHANNELS` | 監視する公開・非公開チャンネル | `main-team:town-square,main-team:off-topic` |
 | `WATCH_DM_CHANNEL_IDS` | 監視を許可するDM IDの一覧 | 空（DM監視なし） |
 | `DRAFTS_CHANNEL` | 下書き出力先 | `main-team:ai-drafts` |
+| `LLM_PROVIDER` | 生成先 (`ollama` または `openai`) | `ollama` |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | ローカルLLMの接続先・モデル | `http://127.0.0.1:11434` / `qwen2.5:14b` |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | APIキー・モデル | 空（API利用時に必須） / `gpt-6-luna` |
+| `OPENAI_REASONING_EFFORT` / `OPENAI_MAX_OUTPUT_TOKENS` | 推論量・返信出力上限 | `low` / `800` |
+| `REPLY_PERSONA_FILE` | 返信者ペルソナのローカルファイル | `data/reply-drafter-persona.txt` |
 | `POLL_SECONDS` / `CONTEXT_POSTS` | 確認間隔・プロンプトに含める文脈数 | `5` / `8` |
 
 `.env` のサンプルは `.env.example` を参照してください。BotのDM一覧は `python .\reply_drafter.py --list-dms` で確認できます。
