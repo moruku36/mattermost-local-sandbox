@@ -85,11 +85,11 @@ PC起動時にMattermost環境が自動的にバックグラウンド起動す�
 
 ## AI返信案アシスタント（Ollama / OpenAI API）
 
-新着のMattermost投稿を監視し、OllamaまたはOpenAI APIで返信案を作成して、本人とBotだけが参加する非公開 `ai-drafts` チャンネルへ投稿します。Town SquareとOff-Topicは設定例に含まれています。**元のチャンネルやDMへ返信を送る機能はありません**。内容を確認・編集して、返信は人間が元の投稿へ手動で送信します。
+新着のMattermost投稿を監視し、OllamaまたはOpenAI APIで返信案を作成して、本人とBotだけが参加する非公開 `ai-drafts` チャンネルへ投稿します。Town SquareとOff-Topicは設定例に含まれています。`ai-drafts` に人間が依頼を書けば、その依頼に沿った文章案も同チャンネルに返します（例: 「この内容への返信を考えて: …」）。**元のチャンネルやDMへ返信を送る機能はありません**。内容を確認・編集して、返信は人間が手動で送信します。
 
 `LLM_PROVIDER=ollama` の場合、メッセージ本文はこのPC上のOllama（既定 `qwen2.5:14b`）だけで処理します。`LLM_PROVIDER=openai` の場合、現在の投稿、設定した会話文脈、返信者のペルソナがOpenAI APIへ送信されます。API応答は `store=false` で要求しますが、APIの標準不正利用監視ログは最大30日保持される場合があります。社内情報を外部APIへ送る運用が許可されているか確認してください。詳細は[OpenAI APIのデータ管理](https://developers.openai.com/api/docs/guides/your-data)を参照してください。
 
-監視対象は `.env` の `WATCH_CHANNELS` と `WATCH_DM_CHANNEL_IDS` で明示したものだけです。各チャンネルでBotが読める必要があります。起動時点より前の投稿は既読扱いになり、返信案は作られません。
+通常の監視対象は `.env` の `WATCH_CHANNELS` と `WATCH_DM_CHANNEL_IDS` で指定します。加えて `DRAFTS_CHANNEL` は依頼入力用として監視されます。`ai-drafts` で人間が新しい依頼を投稿するとAIが回答案を同チャンネルへ返します。Bot自身の投稿には反応しません。各チャンネルでBotが読める必要があります。起動時点より前の投稿は既読扱いになり、返信案は作られません。
 
 ### 初回設定
 
