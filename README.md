@@ -69,4 +69,14 @@ docker compose down
 ```
 
 ### 3. ブラウザでアクセス
-ブラウザで [http://localhost:8065](http://localhost:8065) を開き、上記の管理者アカウントでログインしてください。
+ブラウザで [http://localhost:3000/main-team/channels/ai-drafts](http://localhost:3000/main-team/channels/ai-drafts)（または [http://localhost:8065](http://localhost:8065)）を開き、上記の管理者アカウントでログインしてください。
+
+---
+
+## Windows自動起動・常駐設定
+
+PC起動時にMattermost環境が自動的にバックグラウンド起動するよう、Windowsスタートアップフォルダにスクリプトを登録しています。
+- **スタートアップ登録場所**: `shell:startup`（`start_mattermost.vbs`）
+- **手動起動用スクリプト**:
+  - `start.bat`: ダブルクリックで起動確認できるバッチスクリプト
+  - `start_silent.vbs`: 黒い画面を出さずにバックグラウンド起動するVBScript
