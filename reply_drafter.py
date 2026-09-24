@@ -468,8 +468,14 @@ def main() -> None:
     )
     state = load_state()
     dm_context = load_dm_context()
-    instructions = build_instructions(load_persona())
+    initial_persona = load_persona()
+    if initial_persona:
+        logging.info("Loaded persona (%d chars) from %s", len(initial_persona), PERSONA_FILE)
+    else:
+        logging.warning("Persona file empty or not found: %s", PERSONA_FILE)
+
     while True:
+        instructions = build_instructions(load_persona())
         for channel in channels:
             try:
                 poll_channel(

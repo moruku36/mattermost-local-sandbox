@@ -1,142 +1,158 @@
-# Mattermost Local Sandbox (Slack-Style)
+# Mattermost Local Sandbox
 
-Docker Compose を利用した、ローカル検証用の **Mattermost**（Slack ライク社内チャット）環境です。  
-Slack 風のクラシックテーマ（Aubergine / 茄子紫）、日本語ロケール、折りたたみスレッド（Collapsed Reply Threads）を適用し、5 名の擬似ユーザーによるチャンネル投稿および管理者宛てダイレクトメッセージ（DM）のシードデータが投入された状態を再現しています。
+ローカルMattermostと、人が確認して返信するAIドラフト機能の検証環境です。
 
----
+> **用途:** 個人・開発用のローカル検証。会社の本番利用に必要な可用性、監査、アクセス制御、データ保護の設計は含みません。
 
-## 構成概要
+## 全体像
 
-- **Mattermost Team Edition**: 最新版公式コンテナ（`mattermost/mattermost-team-edition:latest`）
-- **PostgreSQL 16**: 公式コンテナ（`postgres:16-alpine`）
-- **ポートマッピング**: 
-  - `http://localhost:8065`（メインポート）
-  - `http://localhost:3000`（サブポート・フォワード）
-- **永続化**: Docker Named Volume による DB・設定・添付データの安全な永続化
+```mermaid
+flowchart LR
+    H[利用者]
+    MM[Mattermost<br/>Town Square / Off-Topic / DM]
+    D[非公開 ai-drafts]
+    B[reply_drafter.py<br/>ホスト上のPython]
+    C[ローカル設定・状態<br/>.env / persona / state]
+    O[Ollama<br/>ローカルLLM]
+    A[OpenAI Responses API<br/>任意]
+    DB[(PostgreSQL<br/>Docker volume)]
 
----
+    H -->|投稿・依頼| MM
+    MM -->|Mattermost REST API| B
+    B <--> C
+    B -->|LLM_PROVIDER=ollama| O
+    B -->|LLM_PROVIDER=openai| A
+    O --> B
+    A --> B
+    B -->|返信案のみ| D
+    H -->|内容を確認・編集し手動送信| MM
+    MM <--> DB
+    H -->|ai-draftsへの依頼| D
+    D -->|Botが依頼を取得| B
+```
 
-## 実装・カスタマイズ内容
+Botは監視対象の投稿から返信案を作り、`ai-drafts` に出します。`ai-drafts` に書いた人間の依頼にも同じチャンネルで回答案を返します。Botが元のチャンネルやDMへ返信を送ることはありません。
 
-1. **Slack クラシックテーマ（Aubergine）適用**
-   - サイドバーを Slack 標準の濃い紫（`#3F0E40`）に設定し、UI を Slack 風に統一（`apply_slack_theme.sql`）。
-2. **日本語ロケール & 表示最適化**
-   - デフォルトクライアント・サーバーロケールを「日本語（ja）」に設定。
-   - 画面幅全体を使うフルワイド表示を有効化（`update_user_prefs.sql`）。
-3. **Slack 同等のスレッド表示（Collapsed Reply Threads）**
-   - メッセージの返信が右側サイドペインに展開され、左サイドバーに「スレッド」メニューが表示されるモード（常時有効）。
-4. **擬似利用環境（デモデータ投入）**
-   - 5 名の擬似ユーザー（開発リーダー、デザイナー、フロントエンド、QA、PM）を自動生成。
-   - `Town Square`（業務連絡・10 件）および `Off-Topic`（ランチ・機材雑談・9 件）の会話履歴を自動投入。
-   - 管理者（`admin`）宛てのダイレクトメッセージ（DM・3 件）を事前送信（`seed_data.py`）。
+## コンポーネント
 
----
+| コンポーネント | 役割 | 実行場所 |
+|---|---|---|
+| Mattermost Team Edition | チャットUIとREST API | Docker |
+| PostgreSQL 16 | Mattermostの永続データ | Docker volume |
+| `reply_drafter.py` | 投稿の定期確認、文脈収集、ドラフト投稿 | ホスト上のPython |
+| Ollama | ローカルでの文章生成 | 任意・ローカル |
+| OpenAI Responses API | クラウドでの文章生成 | 任意・外部API |
 
-## アカウント認証情報
+## 機能
 
-### 管理者（自分）
-- **ユーザー名 / メールアドレス**: `admin` / `admin@example.com`
-- **パスワード**: `MattermostAdmin2026!`
-- **権限**: システム管理者（System Admin）
-- **初期チーム**: `Main Team`
+| 機能 | 内容 |
+|---|---|
+| ローカルチャット環境 | Mattermost、PostgreSQL、Docker Compose。日本語表示とSlack風テーマを適用 |
+| デモデータ | Main Teamのチャンネルと擬似ユーザー、初期会話を投入 |
+| チャンネル返信案 | `WATCH_CHANNELS` の新着投稿を処理。サンプル設定はTown SquareとOff-Topic |
+| DM返信案 | Botが参加したDMのうち、`WATCH_DM_CHANNEL_IDS` に明示したIDだけを処理 |
+| 手動AI依頼 | `ai-drafts` に依頼を書くと、回答案を同チャンネルへ投稿 |
+| 人による送信 | 内容を確認・編集し、人間が元のチャンネルやDMへ手動で送信 |
 
-### デモユーザー（5 名）
-| ユーザー名 | 表示名 | 役職 / ロール | メールアドレス | パスワード |
-| :--- | :--- | :--- | :--- | :--- |
-| `tanaka` | 田中 太郎 | 開発リーダー | `tanaka@example.com` | `UserPassword123!` |
-| `sato` | 佐藤 美咲 | デザイナー | `sato@example.com` | `UserPassword123!` |
-| `suzuki` | 鈴木 一郎 | フロントエンド | `suzuki@example.com` | `UserPassword123!` |
-| `takahashi` | 高橋 健太 | QA・テスター | `takahashi@example.com` | `UserPassword123!` |
-| `watanabe` | 渡辺 彩 | プロダクトマネージャー | `watanabe@example.com` | `UserPassword123!` |
+## 起動
 
----
+### 1. Mattermostを起動
 
-## クイックスタート手順
+初回にロケール、テーマ、デモデータを含めてセットアップする場合（Bash環境が必要）：
 
-### 1. 起動（初回または再セットアップ）
 ```bash
-# スクリプトによる一括起動＆シードデータ投入
 bash setup.sh
 ```
 
-### 2. 通常のコンテナ起動・停止
-```bash
-# 起動
-docker compose up -d
+Docker Compose環境だけを起動・停止する場合：
 
-# 停止
+```bash
+docker compose up -d
 docker compose down
 ```
 
-### 3. ブラウザでアクセス
-ブラウザで [http://localhost:3000/main-team/channels/ai-drafts](http://localhost:3000/main-team/channels/ai-drafts)（または [http://localhost:8065](http://localhost:8065)）を開き、上記の管理者アカウントでログインしてください。
+ブラウザーで [http://localhost:3000](http://localhost:3000) または [http://localhost:8065](http://localhost:8065) を開きます。初期デモの認証情報はセットアップ用スクリプトにあります。**公開・共有環境では使わず、Mattermostのポートをインターネットや信頼できないネットワークに公開しないでください。**
 
----
+### 2. Botを設定
 
-## Windows自動起動・常駐設定
-
-PC起動時にMattermost環境が自動的にバックグラウンド起動するよう、Windowsスタートアップフォルダにスクリプトを登録しています。
-- **スタートアップ登録場所**: `shell:startup`（`start_mattermost.vbs`）
-- **手動起動用スクリプト**:
-  - `start.bat`: ダブルクリックで起動確認できるバッチスクリプト
-  - `start_silent.vbs`: 黒い画面を出さずにバックグラウンド起動するVBScript
-
----
-
-## AI返信案アシスタント（Ollama / OpenAI API）
-
-新着のMattermost投稿を監視し、OllamaまたはOpenAI APIで返信案を作成して、本人とBotだけが参加する非公開 `ai-drafts` チャンネルへ投稿します。Town SquareとOff-Topicは設定例に含まれています。`ai-drafts` に人間が依頼を書けば、その依頼に沿った文章案も同チャンネルに返します（例: 「この内容への返信を考えて: …」）。**元のチャンネルやDMへ返信を送る機能はありません**。内容を確認・編集して、返信は人間が手動で送信します。
-
-`LLM_PROVIDER=ollama` の場合、メッセージ本文はこのPC上のOllama（既定 `qwen2.5:14b`）だけで処理します。`LLM_PROVIDER=openai` の場合、現在の投稿、設定した会話文脈、返信者のペルソナがOpenAI APIへ送信されます。API応答は `store=false` で要求しますが、APIの標準不正利用監視ログは最大30日保持される場合があります。社内情報を外部APIへ送る運用が許可されているか確認してください。詳細は[OpenAI APIのデータ管理](https://developers.openai.com/api/docs/guides/your-data)を参照してください。
-
-通常の監視対象は `.env` の `WATCH_CHANNELS` と `WATCH_DM_CHANNEL_IDS` で指定します。加えて `DRAFTS_CHANNEL` は依頼入力用として監視されます。`ai-drafts` で人間が新しい依頼を投稿するとAIが回答案を同チャンネルへ返します。Bot自身の投稿には反応しません。各チャンネルでBotが読める必要があります。起動時点より前の投稿は既読扱いになり、返信案は作られません。
-
-### 初回設定
-
-1. 管理者がMattermostのBotアカウント作成を有効にし、専用Botアカウントを作成します。作成時に表示されるBot access tokenを控えます。Botに管理者権限や全チャンネル投稿権限を付けず、対象のチャンネルと`ai-drafts`だけに参加させます。
-2. Mattermostに非公開 `ai-drafts` チャンネルを作成し、自分と専用Botだけを参加させます。
-3. `.env.example` を `.env` にコピーし、Botトークンを `MATTERMOST_BOT_TOKEN` に設定します。`MATTERMOST_URL` はブラウザーで開いている方に合わせます（`http://localhost:3000` または `http://localhost:8065`）。`.env` と会話文脈・処理状態ファイルはGit管理外です。
-4. 使用する生成先を選びます。Ollamaを使う場合はインストール・起動してモデルを取得します（例: `ollama pull qwen2.5:14b`）。OpenAI APIを使う場合はAPIキーを取得し、 `.env` の `LLM_PROVIDER=openai` と `OPENAI_API_KEY` を設定します。ChatGPTの契約とAPI利用料は別です。Pythonの追加パッケージは不要です。
-5. 必要であれば `data/reply-drafter-persona.example.txt` を `data/reply-drafter-persona.txt` にコピーして返信者の口調や立場を記入します。実ファイルはGit管理外です。API利用時はこの内容もリクエストごとにOpenAIへ送信されます。
-
-### 起動
+MattermostにBotアカウントを作り、監視するチャンネルと非公開 `ai-drafts` に参加させます。Botには必要最小限の権限を設定してください。
 
 ```powershell
+# 初回のみ: .env.example をコピーし、トークン等を設定
 Copy-Item .env.example .env
-# .env の MATTERMOST_BOT_TOKEN を編集
-# OpenAI APIを使う場合は LLM_PROVIDER=openai と OPENAI_API_KEY も設定
-New-Item -ItemType Directory -Force data
-Copy-Item .\data\reply-drafter-persona.example.txt .\data\reply-drafter-persona.txt
+notepad .env
+
+# PythonでBotを起動
 python .\reply_drafter.py
 ```
 
-初回起動では現在ある投稿を監視済みにし、それ以降の新着だけを処理します。監視対象を増やすときは `WATCH_CHANNELS` に `team-slug:channel-slug` をカンマ区切りで指定し、各チャンネルへBotを参加させてからプロセスを再起動します。状態ファイルには重複防止用の投稿IDのみを保存します。停止は `Ctrl+C` です。Mattermost停止後はMattermostを起動し直し、同じコマンドでこのプロセスも起動します。
+既存の `.env` を再利用する場合は上書きしないでください。起動後、Botは既存投稿を読み取り済みにし、その後に届いた投稿から処理します。Botの停止は `Ctrl+C` です。設定を変えた場合は再起動してください。
 
-### DMの返信案
+### 3. 生成先を選択
 
-DMも返信案を作れますが、Botが参加しているDMだけが対象です。管理者宛ての既存1対1 DMにBotを追加すると、相手にもBotが参加者として見える新しいグループDMになります。元の1対1 DMは監視できず、既存の履歴もグループDMには引き継がれません。相手と共有することを確認してから、Mattermost上で新しいグループDMを作成してください。
+| `.env` 設定 | 生成先 | 投稿データの送信先 |
+|---|---|---|
+| `LLM_PROVIDER=ollama` | Ollama（既定 `qwen2.5:14b`） | ローカルPC |
+| `LLM_PROVIDER=openai` | OpenAI API（既定 `gpt-6-luna`） | OpenAI Responses API |
 
-追加後、`python .\reply_drafter.py --list-dms` を実行すると、Botが現在参加しているDMの相手とチャンネルIDを表示します。対象のIDだけを `.env` の `WATCH_DM_CHANNEL_IDS` に指定します。複数指定はカンマ区切りです。Botが参加しているDMのうち、ここに明記したIDだけを監視します。DM内の直近の会話を文脈に含め、返信案は引き続き `ai-drafts` に投稿します。新しいDMを監視対象に加えた初回起動では、既存投稿を読み取り済みにして、その後の新着から返信案を作ります。
+OpenAI APIを使う場合は `.env` に `LLM_PROVIDER=openai` と `OPENAI_API_KEY` を設定します。ChatGPTの契約とAPI利用料は別です。APIキーをREADMEやGitHubに書かないでください。
 
-`WATCH_DM_CHANNEL_IDS` を空欄にするとDMは監視しません。監視を始める際はプロセスを再起動してください。
+ペルソナを設定する場合は `data/reply-drafter-persona.example.txt` を `data/reply-drafter-persona.txt` にコピーして編集します。個人用ファイルは `.gitignore` 対象で、GitHubへは含めません。
 
-Mattermostでは既存の1対1 DMへ新しい参加者を加えると、履歴のない新しいグループDMが作られます。旧DMの文脈も必要な場合は、対象を選んで `data/reply-drafter-context.json` にグループDMチャンネルIDをキーとして保存すると、返信案の文脈に加えられます。このファイルはGit管理外で、読み込んだ投稿文はローカルOllamaだけに渡ります。個人DMの内容を共有する際は、必ず参加者の同意を得てください。
+## データとプライバシー
 
-### 設定項目
+| データ | 処理 |
+|---|---|
+| 監視対象の投稿と会話文脈 | BotがMattermost APIから読み取る。`CONTEXT_POSTS` 件までを生成時の文脈に含める |
+| Ollama利用時 | 設定したローカルOllamaで生成。LLMプロバイダーへの外部送信なし |
+| OpenAI API利用時 | 対象投稿、設定した会話文脈、返信者ペルソナをAPIへ送信。Responses APIは `store=false` を指定 |
+| 処理状態 | `data/reply-drafter-state.json` に重複防止用の投稿IDを保存。本文は保存しない |
+| DM追加文脈 | 必要に応じ `data/reply-drafter-context.json` にローカル保存。含めた投稿文は選択したLLMにも渡る |
+| 資格情報・個人設定 | `.env` と `data/reply-drafter-persona.txt` はGit管理対象外 |
+
+OpenAI APIでは、APIデータは明示的にオプトインしない限りモデル訓練に使われず、標準の不正利用監視ログは最大30日保持される場合があります。`store=false` はResponses APIのアプリケーション状態保存を無効にする指定であり、不正利用監視ログの保持を無効にするものではありません。社内データを送信する前に、所属組織の規程とOpenAIの[APIデータ管理](https://developers.openai.com/api/docs/guides/your-data)を確認してください。
+
+## DMを監視する場合
+
+既存の1対1 DMにBotを加えると、相手にもBotが見えるグループDMが新たに作られ、過去の会話は引き継がれません。参加者に共有を確認してから設定してください。
+
+```powershell
+python .\reply_drafter.py --list-dms
+```
+
+出力された対象DMのIDだけを `.env` の `WATCH_DM_CHANNEL_IDS` にカンマ区切りで設定し、Botを再起動します。空欄ならDMを監視しません。
+
+## 主な設定
 
 | 変数 | 用途 | 既定値 |
 |---|---|---|
-| `MATTERMOST_URL` | Mattermost APIのURL | `http://localhost:3000` |
-| `MATTERMOST_BOT_TOKEN` | 専用Botのアクセストークン | 必須 |
-| `WATCH_CHANNELS` | 監視する公開・非公開チャンネル | `main-team:town-square,main-team:off-topic` |
-| `WATCH_DM_CHANNEL_IDS` | 監視を許可するDM IDの一覧 | 空（DM監視なし） |
-| `DRAFTS_CHANNEL` | 下書き出力先 | `main-team:ai-drafts` |
-| `LLM_PROVIDER` | 生成先 (`ollama` または `openai`) | `ollama` |
-| `OLLAMA_URL` / `OLLAMA_MODEL` | ローカルLLMの接続先・モデル | `http://127.0.0.1:11434` / `qwen2.5:14b` |
-| `OPENAI_API_KEY` / `OPENAI_MODEL` | APIキー・モデル | 空（API利用時に必須） / `gpt-6-luna` |
-| `OPENAI_REASONING_EFFORT` / `OPENAI_MAX_OUTPUT_TOKENS` | 推論量・返信出力上限 | `low` / `800` |
-| `REPLY_PERSONA_FILE` | 返信者ペルソナのローカルファイル | `data/reply-drafter-persona.txt` |
-| `POLL_SECONDS` / `CONTEXT_POSTS` | 確認間隔・プロンプトに含める文脈数 | `5` / `8` |
+| `MATTERMOST_URL` | MattermostのURL | `http://localhost:3000` |
+| `MATTERMOST_BOT_TOKEN` | Botアクセストークン | 必須 |
+| `WATCH_CHANNELS` | チーム名とチャンネル名の監視一覧 | `main-team:town-square,main-team:off-topic` |
+| `WATCH_DM_CHANNEL_IDS` | 許可するDMのID一覧 | 空（監視なし） |
+| `DRAFTS_CHANNEL` | ドラフトと依頼の入出力先 | `main-team:ai-drafts` |
+| `LLM_PROVIDER` | `ollama` または `openai` | `ollama` |
+| `OLLAMA_URL` / `OLLAMA_MODEL` | ローカルLLMのURLとモデル | `http://127.0.0.1:11434` / `qwen2.5:14b` |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | OpenAI APIキーとモデル | 空 / `gpt-6-luna` |
+| `OPENAI_REASONING_EFFORT` / `OPENAI_MAX_OUTPUT_TOKENS` | 推論量と出力上限 | `low` / `800` |
+| `POLL_SECONDS` / `CONTEXT_POSTS` | 監視間隔（秒）と文脈件数 | `5` / `8` |
+| `REPLY_PERSONA_FILE` | ローカルのペルソナファイル | `data/reply-drafter-persona.txt` |
 
-`.env` のサンプルは `.env.example` を参照してください。BotのDM一覧は `python .\reply_drafter.py --list-dms` で確認できます。
+## 制約
 
+- Botが参加して読み取りできるチャンネルのみ監視できます。
+- 監視開始時点より前の投稿は処理しません。
+- `ai-drafts` は依頼入力用にもなるため、人間の新規投稿は回答生成を起動します。Bot自身の投稿には反応しません。
+- AIは回答案を `ai-drafts` に投稿するだけです。元投稿への返信・送信は人が行います。
+- このサンドボックスは、本番向けの認証強化、監査、障害復旧、秘密管理を提供しません。
+
+## リポジトリ内の主なファイル
+
+| ファイル | 内容 |
+|---|---|
+| `docker-compose.yml` | MattermostとPostgreSQL |
+| `setup.sh` | 初期設定、デモアカウント、テーマ、ロケール |
+| `seed_data.py` | デモ会話の投入 |
+| `reply_drafter.py` | ローカルLLM / OpenAI APIによる返信案生成 |
+| `.env.example` | 設定テンプレート（秘密情報は含めない） |
+| `data/reply-drafter-persona.example.txt` | ペルソナの記入例 |
