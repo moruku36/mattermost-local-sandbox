@@ -2,7 +2,12 @@
 *.log
 __pycache__/
 *.pyc
+.env
+data/reply-drafter-state.json
+data/reply-drafter-state.tmp
+data/reply-drafter-context.json
 
 # OS Files
 .DS_Store
 Thumbs.db
+

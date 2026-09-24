@@ -80,3 +80,53 @@ PC起動時にMattermost環境が自動的にバックグラウンド起動す�
 - **手動起動用スクリプト**:
   - `start.bat`: ダブルクリックで起動確認できるバッチスクリプト
   - `start_silent.vbs`: 黒い画面を出さずにバックグラウンド起動するVBScript
+
+---
+
+## AI返信案アシスタント（ローカルLLM）
+
+新着のMattermost投稿を監視し、ローカルのOllamaで返信案を作成して、本人とBotだけが参加する非公開 `ai-drafts` チャンネルへ投稿します。Town SquareとOff-Topicは設定例に含まれています。**元のチャンネルやDMへ返信を送る機能はありません**。内容を確認・編集して、返信は人間が元の投稿へ手動で送信します。
+
+メッセージ本文はMattermost APIからこのPC上のプロセスへ渡り、Ollama（既定 `qwen2.5:14b`）で処理されます。外部LLMへは送信しません。監視対象は `.env` の `WATCH_CHANNELS` と `WATCH_DM_CHANNEL_IDS` で明示したものだけです。各チャンネルでBotが読める必要があります。起動時点より前の投稿は既読扱いになり、返信案は作られません。
+
+### 初回設定
+
+1. 管理者がMattermostのBotアカウント作成を有効にし、専用Botアカウントを作成します。作成時に表示されるBot access tokenを控えます。Botに管理者権限や全チャンネル投稿権限を付けず、対象のチャンネルと`ai-drafts`だけに参加させます。
+2. Mattermostに非公開 `ai-drafts` チャンネルを作成し、自分と専用Botだけを参加させます。
+3. `.env.example` を `.env` にコピーし、Botトークンを `MATTERMOST_BOT_TOKEN` に設定します。`MATTERMOST_URL` はブラウザーで開いている方に合わせます（`http://localhost:3000` または `http://localhost:8065`）。`.env` と会話文脈・処理状態ファイルはGit管理外です。
+4. Ollamaをインストールして起動し、モデルを取得します（例: `ollama pull qwen2.5:14b`）。モデル変更は `OLLAMA_MODEL` で行えます。Pythonの追加パッケージは不要です。
+
+### 起動
+
+```powershell
+Copy-Item .env.example .env
+# .env の MATTERMOST_BOT_TOKEN を編集
+python .\reply_drafter.py
+```
+
+初回起動では現在ある投稿を監視済みにし、それ以降の新着だけを処理します。監視対象を増やすときは `WATCH_CHANNELS` に `team-slug:channel-slug` をカンマ区切りで指定し、各チャンネルへBotを参加させてからプロセスを再起動します。状態ファイルには重複防止用の投稿IDのみを保存します。停止は `Ctrl+C` です。Mattermost停止後はMattermostを起動し直し、同じコマンドでこのプロセスも起動します。
+
+### DMの返信案
+
+DMも返信案を作れますが、Botが参加しているDMだけが対象です。管理者宛ての既存1対1 DMにBotを追加すると、相手にもBotが参加者として見える新しいグループDMになります。元の1対1 DMは監視できず、既存の履歴もグループDMには引き継がれません。相手と共有することを確認してから、Mattermost上で新しいグループDMを作成してください。
+
+追加後、`python .\reply_drafter.py --list-dms` を実行すると、Botが現在参加しているDMの相手とチャンネルIDを表示します。対象のIDだけを `.env` の `WATCH_DM_CHANNEL_IDS` に指定します。複数指定はカンマ区切りです。Botが参加しているDMのうち、ここに明記したIDだけを監視します。DM内の直近の会話を文脈に含め、返信案は引き続き `ai-drafts` に投稿します。新しいDMを監視対象に加えた初回起動では、既存投稿を読み取り済みにして、その後の新着から返信案を作ります。
+
+`WATCH_DM_CHANNEL_IDS` を空欄にするとDMは監視しません。監視を始める際はプロセスを再起動してください。
+
+Mattermostでは既存の1対1 DMへ新しい参加者を加えると、履歴のない新しいグループDMが作られます。旧DMの文脈も必要な場合は、対象を選んで `data/reply-drafter-context.json` にグループDMチャンネルIDをキーとして保存すると、返信案の文脈に加えられます。このファイルはGit管理外で、読み込んだ投稿文はローカルOllamaだけに渡ります。個人DMの内容を共有する際は、必ず参加者の同意を得てください。
+
+### 設定項目
+
+| 変数 | 用途 | 既定値 |
+|---|---|---|
+| `MATTERMOST_URL` | Mattermost APIのURL | `http://localhost:3000` |
+| `MATTERMOST_BOT_TOKEN` | 専用Botのアクセストークン | 必須 |
+| `WATCH_CHANNELS` | 監視する公開・非公開チャンネル | `main-team:town-square,main-team:off-topic` |
+| `WATCH_DM_CHANNEL_IDS` | 監視を許可するDM IDの一覧 | 空（DM監視なし） |
+| `DRAFTS_CHANNEL` | 下書き出力先 | `main-team:ai-drafts` |
+| `OLLAMA_URL` / `OLLAMA_MODEL` | ローカルLLMの接続先・モデル | `http://127.0.0.1:11434` / `qwen2.5:14b` |
+| `POLL_SECONDS` / `CONTEXT_POSTS` | 確認間隔・プロンプトに含める文脈数 | `5` / `8` |
+
+`.env` のサンプルは `.env.example` を参照してください。BotのDM一覧は `python .\reply_drafter.py --list-dms` で確認できます。
+
