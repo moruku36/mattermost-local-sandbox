@@ -263,11 +263,34 @@ def list_bot_dm_channels(base_url: str, token: str) -> None:
         print("No direct or group DM channels are available to this Bot.")
 
 
-def get_recent_posts(base_url: str, token: str, channel_id: str) -> list[dict[str, Any]]:
-    query = urlencode({"page": 0, "per_page": PAGE_SIZE})
-    result = api_json(base_url, token, "GET", f"/channels/{quote(channel_id, safe='')}/posts?{query}")
-    posts = result.get("posts", {})
-    return sorted(posts.values(), key=lambda post: (post.get("create_at", 0), post.get("id", "")))
+def get_recent_posts(
+    base_url: str, token: str, channel_id: str,
+    cursor: tuple[int, str] | None = None, seen_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Page back to the saved cursor so bursts over PAGE_SIZE are not lost."""
+    collected: list[dict[str, Any]] = []
+    page = 0
+    while True:
+        query = urlencode({"page": page, "per_page": PAGE_SIZE})
+        result = api_json(base_url, token, "GET", f"/channels/{quote(channel_id, safe='')}/posts?{query}")
+        batch = list(result.get("posts", {}).values())
+        if not batch:
+            break
+        for post in batch:
+            key = (post.get("create_at", 0), post.get("id", ""))
+            if cursor is None or key > cursor:
+                collected.append(post)
+        # Legacy state has seen IDs but no cursor. Stop once a known post is reached.
+        if cursor is None and seen_ids is None:
+            break
+        if cursor is not None and all((p.get("create_at", 0), p.get("id", "")) <= cursor for p in batch):
+            break
+        if cursor is None and seen_ids and any(p.get("id") in seen_ids for p in batch):
+            break
+        if len(batch) < PAGE_SIZE:
+            break
+        page += 1
+    return sorted(collected, key=lambda post: (post.get("create_at", 0), post.get("id", "")))
 
 
 def create_draft(
@@ -372,14 +395,17 @@ def poll_channel(
     state: dict[str, Any],
     dm_context: dict[str, list[dict[str, Any]]],
 ) -> None:
-    posts = get_recent_posts(base_url, token, channel["id"])
     channel_state = state["channels"].setdefault(channel["id"], {"seen_ids": []})
     ordered_seen = list(channel_state["seen_ids"])
     seen = set(ordered_seen)
+    saved_cursor = channel_state.get("cursor")
+    cursor = tuple(saved_cursor) if saved_cursor else None
+    posts = get_recent_posts(base_url, token, channel["id"], cursor, seen if channel_state.get("initialized") else None)
 
     # On first run, establish a cursor without generating drafts for seeded history.
     if "initialized" not in channel_state:
         channel_state["seen_ids"] = [post["id"] for post in posts[-PAGE_SIZE:]]
+        channel_state["cursor"] = [posts[-1].get("create_at", 0), posts[-1]["id"]] if posts else [0, ""]
         channel_state["initialized"] = True
         save_state(state)
         logging.info("Watching %s from now (%d existing posts skipped)", channel.get("display_name", f"#{channel['name']}"), len(posts))
@@ -389,16 +415,19 @@ def poll_channel(
         post_id = post.get("id", "")
         if not post_id or post_id in seen:
             continue
+        post_cursor = [post.get("create_at", 0), post_id]
         if post.get("user_id") == bot_id or post.get("delete_at"):
             seen.add(post_id)
             ordered_seen.append(post_id)
             channel_state["seen_ids"] = ordered_seen[-2000:]
+            channel_state["cursor"] = post_cursor
             save_state(state)
             continue
         if not post.get("message", "").strip():
             seen.add(post_id)
             ordered_seen.append(post_id)
             channel_state["seen_ids"] = ordered_seen[-2000:]
+            channel_state["cursor"] = post_cursor
             save_state(state)
             continue
 
@@ -414,10 +443,11 @@ def poll_channel(
             logging.info("Generated a private draft for post %s in %s", post_id, channel.get("display_name", f"#{channel['name']}"))
         except Exception as exc:  # Keep message content and credentials out of logs.
             logging.error("Draft failed for post %s in %s: %s", post_id, channel.get("display_name", f"#{channel['name']}"), exc)
-            continue
+            break  # Retry this post before advancing the cursor.
         seen.add(post_id)
         ordered_seen.append(post_id)
         channel_state["seen_ids"] = ordered_seen[-2000:]
+        channel_state["cursor"] = post_cursor
         save_state(state)
 
 
