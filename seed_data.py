@@ -1,13 +1,20 @@
 import json
+import os
 import subprocess
 import time
 import urllib.request
+from urllib.parse import quote
+
+ADMIN_PASSWORD = os.environ.get("DEMO_ADMIN_PASSWORD", "")
+USER_PASSWORD = os.environ.get("DEMO_USER_PASSWORD", "")
+if not ADMIN_PASSWORD or not USER_PASSWORD:
+    raise SystemExit("Set DEMO_ADMIN_PASSWORD and DEMO_USER_PASSWORD before seeding.")
 
 USERS = [
     {
         "username": "tanaka",
         "email": "tanaka@example.com",
-        "password": "UserPassword123!",
+        "password": USER_PASSWORD,
         "firstname": "太郎",
         "lastname": "田中",
         "nickname": "タナカ",
@@ -15,7 +22,7 @@ USERS = [
     {
         "username": "sato",
         "email": "sato@example.com",
-        "password": "UserPassword123!",
+        "password": USER_PASSWORD,
         "firstname": "美咲",
         "lastname": "佐藤",
         "nickname": "サトウ",
@@ -23,7 +30,7 @@ USERS = [
     {
         "username": "suzuki",
         "email": "suzuki@example.com",
-        "password": "UserPassword123!",
+        "password": USER_PASSWORD,
         "firstname": "一郎",
         "lastname": "鈴木",
         "nickname": "スズキ",
@@ -31,7 +38,7 @@ USERS = [
     {
         "username": "takahashi",
         "email": "takahashi@example.com",
-        "password": "UserPassword123!",
+        "password": USER_PASSWORD,
         "firstname": "健太",
         "lastname": "高橋",
         "nickname": "タカハシ",
@@ -39,7 +46,7 @@ USERS = [
     {
         "username": "watanabe",
         "email": "watanabe@example.com",
-        "password": "UserPassword123!",
+        "password": USER_PASSWORD,
         "firstname": "彩",
         "lastname": "渡辺",
         "nickname": "ワタナベ",
@@ -49,30 +56,65 @@ USERS = [
 # 1. mmctl でユーザー作成とチーム・チャンネル追加
 for u in USERS:
     # ユーザー作成
-    cmd_create = f'docker compose exec mattermost mmctl --local user create --email "{u["email"]}" --username "{u["username"]}" --password "{u["password"]}" --firstname "{u["firstname"]}" --lastname "{u["lastname"]}"'
-    subprocess.run(cmd_create, shell=True, check=False)
+    subprocess.run(
+        ["docker", "compose", "exec", "-T", "mattermost", "mmctl", "--local", "user", "create",
+         "--email", u["email"], "--username", u["username"], "--password", u["password"],
+         "--firstname", u["firstname"], "--lastname", u["lastname"]],
+        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
 
     # チーム追加
     subprocess.run(
-        f'docker compose exec mattermost mmctl --local team users add main-team {u["username"]}',
-        shell=True,
+        ["docker", "compose", "exec", "-T", "mattermost", "mmctl", "--local", "team", "users", "add", "main-team", u["username"]],
         check=False,
     )
     # チャンネル追加
     subprocess.run(
-        f'docker compose exec mattermost mmctl --local channel users add main-team:town-square {u["username"]}',
-        shell=True,
+        ["docker", "compose", "exec", "-T", "mattermost", "mmctl", "--local", "channel", "users", "add", "main-team:town-square", u["username"]],
         check=False,
     )
     subprocess.run(
-        f'docker compose exec mattermost mmctl --local channel users add main-team:off-topic {u["username"]}',
-        shell=True,
+        ["docker", "compose", "exec", "-T", "mattermost", "mmctl", "--local", "channel", "users", "add", "main-team:off-topic", u["username"]],
         check=False,
     )
 
 print("Users created and added to channels.")
 
 BASE_URL = "http://localhost:8065/api/v4"
+
+
+def get_json(token, path):
+    req = urllib.request.Request(
+        f"{BASE_URL}{path}", headers={"Authorization": f"Bearer {token}"}
+    )
+    with urllib.request.urlopen(req) as res:
+        return json.load(res)
+
+
+def channel_id(token, team_name, channel_name):
+    team = get_json(token, f"/teams/name/{quote(team_name)}")
+    channel = get_json(token, f"/teams/{team['id']}/channels/name/{quote(channel_name)}")
+    return channel["id"]
+
+
+def existing_messages(token, channel_id):
+    messages = set()
+    page = 0
+    while True:
+        result = get_json(token, f"/channels/{channel_id}/posts?page={page}&per_page=200")
+        batch = list(result["posts"].values())
+        messages.update((p["user_id"], p["message"]) for p in batch)
+        if len(batch) < 200:
+            return messages
+        page += 1
+
+
+def post_once(token, user_id, channel_id, message, existing):
+    key = (user_id, message)
+    if key not in existing:
+        post_message(token, channel_id, message)
+        existing.add(key)
+        time.sleep(0.3)
 
 
 def login(username, password):
@@ -128,11 +170,13 @@ for u in USERS:
     user_ids[u["username"]] = uid
 
 # AdminのIDを取得
-admin_token, admin_id = login("admin", "MattermostAdmin2026!")
+admin_token, admin_id = login("admin", ADMIN_PASSWORD)
 
 # チャンネルID
-TOWN_SQUARE = "rf35sxhecfdqjpfgfh91de67fw"
-OFF_TOPIC = "56usekcsj7rf5ntzz1pg1j7wbh"
+TOWN_SQUARE = channel_id(admin_token, "main-team", "town-square")
+OFF_TOPIC = channel_id(admin_token, "main-team", "off-topic")
+town_existing = existing_messages(admin_token, TOWN_SQUARE)
+off_existing = existing_messages(admin_token, OFF_TOPIC)
 
 # --- Town Square 投稿 ---
 town_square_posts = [
@@ -171,8 +215,7 @@ town_square_posts = [
 
 print("Posting to town-square...")
 for username, msg in town_square_posts:
-    post_message(tokens[username], TOWN_SQUARE, msg)
-    time.sleep(0.3)
+    post_once(tokens[username], user_ids[username], TOWN_SQUARE, msg, town_existing)
 
 # --- Off-Topic 投稿 ---
 off_topic_posts = [
@@ -201,8 +244,7 @@ off_topic_posts = [
 
 print("Posting to off-topic...")
 for username, msg in off_topic_posts:
-    post_message(tokens[username], OFF_TOPIC, msg)
-    time.sleep(0.3)
+    post_once(tokens[username], user_ids[username], OFF_TOPIC, msg, off_existing)
 
 # --- Admin宛て ダイレクトメッセージ (DM) ---
 dms = [
@@ -223,7 +265,6 @@ dms = [
 print("Sending DMs to admin...")
 for username, msg in dms:
     dm_chan = create_dm_channel(tokens[username], user_ids[username], admin_id)
-    post_message(tokens[username], dm_chan, msg)
-    time.sleep(0.3)
+    post_once(tokens[username], user_ids[username], dm_chan, msg, existing_messages(tokens[username], dm_chan))
 
 print("Seed completed successfully!")

@@ -60,6 +60,8 @@ Botは監視対象の投稿から返信案を作り、`ai-drafts` に出しま�
 
 初回にロケール、テーマ、デモデータを含めてセットアップする場合（Bash環境が必要）：
 
+先に `.env.example` を `.env` にコピーし、`POSTGRES_PASSWORD`、`DEMO_ADMIN_PASSWORD`、`DEMO_USER_PASSWORD` にそれぞれ異なる英数字のパスワードを設定してください。`.env` はGit管理対象外です。既存のPostgreSQLボリュームを使っている場合、`POSTGRES_PASSWORD` はそのボリュームに設定済みの値を指定してください。
+
 ```bash
 bash setup.sh
 ```
@@ -71,7 +73,7 @@ docker compose up -d
 docker compose down
 ```
 
-ブラウザーで [http://localhost:3000](http://localhost:3000) または [http://localhost:8065](http://localhost:8065) を開きます。初期デモの認証情報はセットアップ用スクリプトにあります。**公開・共有環境では使わず、Mattermostのポートをインターネットや信頼できないネットワークに公開しないでください。**
+ブラウザーで [http://localhost:3000](http://localhost:3000) または [http://localhost:8065](http://localhost:8065) を開きます。デモユーザーは `DEMO_USER_PASSWORD`、管理者は `DEMO_ADMIN_PASSWORD` でログインします。ポートはローカルホストに限定しています。**公開・共有環境では使わないでください。**
 
 ### 2. Botを設定
 
@@ -142,6 +144,7 @@ python .\reply_drafter.py --list-dms
 
 - Botが参加して読み取りできるチャンネルのみ監視できます。
 - 監視開始時点より前の投稿は処理しません。
+- 再起動時は保存済みカーソルまでページを遡って新着投稿を取得します。生成に失敗した投稿はカーソルを進めず次回再試行します。
 - `ai-drafts` は依頼入力用にもなるため、人間の新規投稿は回答生成を起動します。Bot自身の投稿には反応しません。
 - AIは回答案を `ai-drafts` に投稿するだけです。元投稿への返信・送信は人が行います。
 - このサンドボックスは、本番向けの認証強化、監査、障害復旧、秘密管理を提供しません。
